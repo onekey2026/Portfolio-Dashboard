@@ -345,11 +345,14 @@ function gvizUrl(query) {
 }
 
 async function fetchPubCsv() {
-  // 웹에 공개된 URL로 CSV 읽기 (CORS 허용)
+  // 웹에 공개된 URL로 CSV 읽기 (CORS 허용, UTF-8 강제)
   const url = `https://docs.google.com/spreadsheets/d/e/${PUB_ID}/pub?output=csv&single=true&sheet=${encodeURIComponent(SHEET_NAME)}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('공개 시트 접근 실패');
-  return await res.text();
+  // 한글 깨짐 방지: ArrayBuffer로 읽어 UTF-8 디코딩
+  const buf = await res.arrayBuffer();
+  const decoder = new TextDecoder('utf-8');
+  return decoder.decode(buf);
 }
 
 function parseCsv(text) {
