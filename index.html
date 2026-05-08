@@ -335,101 +335,16 @@ const COLORS = ['#3d7fff','#00d48a','#7c5cfc','#f5c842','#ff5c5c','#00c4e8','#ff
 
 let pieChart = null, barChart = null;
 
-function gvizUrl(query) {
-  // 웹에 공개(pub) 시트: /pub?... 형식으로 CSV 읽기
-  // gviz tq 엔드포인트는 원본 SHEET_ID로 접근
-  const base = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`;
-  const params = new URLSearchParams({ tqx: 'out:json', sheet: SHEET_NAME });
-  if (query) params.set('tq', query);
-  return `${base}?${params}`;
-}
-
-async function fetchPubCsv() {
-  // 웹에 공개된 URL로 CSV 읽기 (CORS 허용, UTF-8 강제)
-  const url = `https://docs.google.com/spreadsheets/d/e/${PUB_ID}/pub?output=csv&single=true&sheet=${encodeURIComponent(SHEET_NAME)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('공개 시트 접근 실패');
-  // 한글 깨짐 방지: ArrayBuffer로 읽어 UTF-8 디코딩
-  const buf = await res.arrayBuffer();
-  const decoder = new TextDecoder('utf-8');
-  return decoder.decode(buf);
-}
-
-function parseCsv(text) {
-  const lines = text.split('\n').filter(l => l.trim());
-  return lines.map(line => {
-    const cols = [];
-    let cur = '', inQ = false;
-    for (const ch of line) {
-      if (ch === '"') { inQ = !inQ; }
-      else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
-      else { cur += ch; }
-    }
-    cols.push(cur.trim());
-    return cols;
-  });
-}
-
-async function gvizFetch(query) {
-  const res = await fetch(gvizUrl(query));
-  const text = await res.text();
-  const match = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]*?)\);?\s*$/);
-  if (!match) throw new Error('gviz 파싱 실패');
-  return JSON.parse(match[1]);
-}
-
-async function fetchSheetData() {
-  // 전체 시트 읽기 — 헤더 없이 range로 읽어 행/열 인덱스로 직접 접근
-  const json = await gvizFetch();
-  if (!json.table) throw new Error('시트 데이터 없음');
-  return json.table;
-}
-
-async function fetchFxRate(table) {
-  // 1행(index 0)에 환율 정보가 있다고 가정. 못 찾으면 GOOGLEFINANCE로 fallback
-  try {
-    const row0 = table.rows[0];
-    // 1행 셀 중 1300~1500 사이 숫자 찾기 (환율)
-    for (const cell of row0.c) {
-      const v = cell?.v;
-      if (typeof v === 'number' && v > 1200 && v < 1600) return v;
-    }
-  } catch {}
-  // fallback: GOOGLEFINANCE
-  try {
-    const json = await gvizFetch(`=GOOGLEFINANCE("CURRENCY:USDKRW")`);
-    return json.table?.rows?.[0]?.c?.[0]?.v || 1350;
-  } catch { return 1350; }
-}
-
-function parseHoldings(table) {
-  // 3행(index 2)부터 데이터, 종목명(A열)이 있는 행만 처리
-  const holdings = [];
-  for (let i = 2; i < table.rows.length; i++) {
-    const row = table.rows[i];
-    if (!row?.c) continue;
-    const get = (col) => row.c[col]?.v ?? null;
-
-    const name = get(COL.name);
-    if (!name || typeof name !== 'string' || name.trim() === '') continue;
-
-    const qty    = Number(get(COL.qty))    || 0;
-    const cost   = Number(get(COL.cost))   || 0;
-    const price  = Number(get(COL.price))  || 0;
-    const target = Number(get(COL.target)) || 0;
-
-    if (qty === 0 && cost === 0) continue; // 빈 행 스킵
-
-    const ticker = TICKER_MAP[name.trim()] || name.trim();
-    const isKr = ticker.includes('.KS') || ticker.includes('005');
-
-    holdings.push({ name: name.trim(), ticker, qty, cost, price, target: target * 100, type: isKr ? 'kr' : 'us' });
-  }
-  return holdings;
+async function fetchSheetRows() {
+  // Apps Script 웹앱 경유 — CORS/인코딩 문제 없음
+  const res = await fetch(APPS_SCRIPT_URL);
+  if (!res.ok) throw new Error('Apps Script 접근 실패');
+  const data = await res.json();
+  return data; // 2D array: data[row][col]
 }
 
 function parseNum(s) {
-  if (!s && s !== 0) return 0;
+  if (s === null || s === undefined || s === '') return 0;
   const n = parseFloat(String(s).replace(/[^0-9.\-]/g, ''));
   return isNaN(n) ? 0 : n;
 }
@@ -438,49 +353,43 @@ async function loadData() {
   document.getElementById('main-content').innerHTML = `<div class="loading"><div class="spinner"></div><span>Google Sheets 데이터 불러오는 중...</span></div>`;
 
   try {
-    const csvText = await fetchPubCsv();
-    const rows = parseCsv(csvText);
+    const rows = await fetchSheetRows(); // 2D array from Apps Script
 
-    if (rows.length < 3) throw new Error('시트 데이터가 부족합니다.');
+    if (!rows || rows.length < 3) throw new Error('시트 데이터가 부족합니다.');
 
-    // 1행(index 0): 환율 추출
+    // 1행(index 0): 환율 추출 (1200~1600 사이 숫자)
     let fxRate = 1350;
     for (const cell of rows[0]) {
-      const v = parseNum(cell);
+      const v = parseFloat(cell);
       if (v > 1200 && v < 1600) { fxRate = v; break; }
     }
 
-    // 3행(index 2)~: 데이터
-    // COL: name=0, target=2, qty=9, price=10(GOOGLEFINANCE실시간), cost=11(매입가수동)
+    // 3행(index 2)~: 종목 데이터
     const holdings = [];
     for (let i = 2; i < rows.length; i++) {
       const row = rows[i];
-      const name = row[COL.name]?.trim();
+      const name = String(row[COL.name] || '').trim();
       if (!name) continue;
 
-      const qty    = parseNum(row[COL.qty]);
-      const price  = parseNum(row[COL.price]);
-      const cost   = parseNum(row[COL.cost]);
-      const target = parseNum(row[COL.target]);
+      const qty    = parseFloat(row[COL.qty])    || 0;
+      const price  = parseFloat(row[COL.price])  || 0;
+      const cost   = parseFloat(row[COL.cost])   || 0;
+      const target = parseFloat(row[COL.target]) || 0;
 
       if (qty === 0 || cost === 0) continue;
 
       const ticker = TICKER_MAP[name] || name;
       const isKr = name === '삼성전자우';
-
       holdings.push({ name, ticker, qty, price, cost, target, type: isKr ? 'kr' : 'us' });
     }
 
-    if (holdings.length === 0) throw new Error('종목 데이터를 찾을 수 없습니다.');
+    if (holdings.length === 0) throw new Error('종목 데이터를 찾을 수 없습니다. Apps Script 배포 설정을 확인하세요.');
 
     // 손익 계산
     const computed = holdings.map(h => {
       let valueUSD, costUSD, currentPrice;
-
       if (h.type === 'kr') {
-        // 삼성전자우: 시트 주가가 원화(KRW)인지 USD인지 판별
-        const rawPrice = h.price;
-        const rawCost  = h.cost;
+        const rawPrice = h.price, rawCost = h.cost;
         if (rawPrice > 1000) {
           currentPrice = rawPrice / fxRate;
           costUSD = (h.qty * rawCost) / fxRate;
@@ -494,7 +403,6 @@ async function loadData() {
         valueUSD = h.qty * currentPrice;
         costUSD  = h.qty * h.cost;
       }
-
       const profitUSD = valueUSD - costUSD;
       const retPct = costUSD > 0 ? (profitUSD / costUSD) * 100 : 0;
       return { ...h, currentPrice, valueUSD, costUSD, profitUSD, retPct };
@@ -513,7 +421,7 @@ async function loadData() {
     document.getElementById('main-content').innerHTML = `
       <div class="error-msg">
         ⚠ 데이터 로드 실패: ${err.message}<br>
-        <small style="color:var(--muted);margin-top:6px;display:block">파일 → 공유 → 웹에 공개 → Sheet1 → CSV 형식으로 게시 확인 후 새로고침하세요.</small>
+        <small style="color:var(--muted);margin-top:6px;display:block">Apps Script 웹앱이 "모든 사용자" 권한으로 배포되었는지 확인하세요.</small>
       </div>`;
   }
 }
