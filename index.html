@@ -310,6 +310,7 @@
 
 <script>
 const SHEET_ID = '1M2wOO_UZrmYdYZ7iuEBYNyCncJGMJHvtEkpd9Zojm-w';
+const PUB_ID = '2PACX-1vTaUjM6fXzRa0wff_bUgqOJkAt_zn-TOXt2jSGqKETfreUjA22LRtNOUOPK5X--iktu7uaJS9T4mHbX';
 const SHEET_NAME = 'Sheet1';
 
 // 컬럼 인덱스 (0-based)
@@ -335,10 +336,35 @@ const COLORS = ['#3d7fff','#00d48a','#7c5cfc','#f5c842','#ff5c5c','#00c4e8','#ff
 let pieChart = null, barChart = null;
 
 function gvizUrl(query) {
+  // 웹에 공개(pub) 시트: /pub?... 형식으로 CSV 읽기
+  // gviz tq 엔드포인트는 원본 SHEET_ID로 접근
   const base = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`;
   const params = new URLSearchParams({ tqx: 'out:json', sheet: SHEET_NAME });
   if (query) params.set('tq', query);
   return `${base}?${params}`;
+}
+
+async function fetchPubCsv() {
+  // 웹에 공개된 URL로 CSV 읽기 (CORS 허용)
+  const url = `https://docs.google.com/spreadsheets/d/e/${PUB_ID}/pub?output=csv&single=true&sheet=${encodeURIComponent(SHEET_NAME)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('공개 시트 접근 실패');
+  return await res.text();
+}
+
+function parseCsv(text) {
+  const lines = text.split('\n').filter(l => l.trim());
+  return lines.map(line => {
+    const cols = [];
+    let cur = '', inQ = false;
+    for (const ch of line) {
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+      else { cur += ch; }
+    }
+    cols.push(cur.trim());
+    return cols;
+  });
 }
 
 async function gvizFetch(query) {
@@ -399,31 +425,63 @@ function parseHoldings(table) {
   return holdings;
 }
 
+function parseNum(s) {
+  if (!s && s !== 0) return 0;
+  const n = parseFloat(String(s).replace(/[^0-9.\-]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
 async function loadData() {
   document.getElementById('main-content').innerHTML = `<div class="loading"><div class="spinner"></div><span>Google Sheets 데이터 불러오는 중...</span></div>`;
 
   try {
-    const table = await fetchSheetData();
-    const fxRate = await fetchFxRate(table);
-    const holdings = parseHoldings(table);
+    const csvText = await fetchPubCsv();
+    const rows = parseCsv(csvText);
 
-    if (holdings.length === 0) throw new Error('종목 데이터를 찾을 수 없습니다. 시트 공개 공유 설정을 확인하세요.');
+    if (rows.length < 3) throw new Error('시트 데이터가 부족합니다.');
 
-    // 손익 계산 — 시트의 주가/매입가 직접 사용
+    // 1행(index 0): 환율 추출
+    let fxRate = 1350;
+    for (const cell of rows[0]) {
+      const v = parseNum(cell);
+      if (v > 1200 && v < 1600) { fxRate = v; break; }
+    }
+
+    // 3행(index 2)~: 데이터
+    // COL: name=0, target=2, qty=9, price=10(GOOGLEFINANCE실시간), cost=11(매입가수동)
+    const holdings = [];
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      const name = row[COL.name]?.trim();
+      if (!name) continue;
+
+      const qty    = parseNum(row[COL.qty]);
+      const price  = parseNum(row[COL.price]);
+      const cost   = parseNum(row[COL.cost]);
+      const target = parseNum(row[COL.target]);
+
+      if (qty === 0 || cost === 0) continue;
+
+      const ticker = TICKER_MAP[name] || name;
+      const isKr = name === '삼성전자우';
+
+      holdings.push({ name, ticker, qty, price, cost, target, type: isKr ? 'kr' : 'us' });
+    }
+
+    if (holdings.length === 0) throw new Error('종목 데이터를 찾을 수 없습니다.');
+
+    // 손익 계산
     const computed = holdings.map(h => {
       let valueUSD, costUSD, currentPrice;
 
       if (h.type === 'kr') {
-        // 삼성전자우: 주가/매입가가 USD 환산값으로 저장된 경우
-        // 만약 시트에 원화로 저장돼 있으면 fxRate로 나눔 (10만원대면 원화)
+        // 삼성전자우: 시트 주가가 원화(KRW)인지 USD인지 판별
         const rawPrice = h.price;
         const rawCost  = h.cost;
         if (rawPrice > 1000) {
-          // 원화 기준
           currentPrice = rawPrice / fxRate;
           costUSD = (h.qty * rawCost) / fxRate;
         } else {
-          // 이미 USD 환산
           currentPrice = rawPrice;
           costUSD = h.qty * rawCost;
         }
@@ -452,7 +510,7 @@ async function loadData() {
     document.getElementById('main-content').innerHTML = `
       <div class="error-msg">
         ⚠ 데이터 로드 실패: ${err.message}<br>
-        <small style="color:var(--muted);margin-top:6px;display:block">구글 스프레드시트 → 공유 → "링크가 있는 모든 사용자" → 뷰어 설정 후 새로고침하세요.</small>
+        <small style="color:var(--muted);margin-top:6px;display:block">파일 → 공유 → 웹에 공개 → Sheet1 → CSV 형식으로 게시 확인 후 새로고침하세요.</small>
       </div>`;
   }
 }
