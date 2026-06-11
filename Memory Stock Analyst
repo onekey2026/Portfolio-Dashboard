@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>메모리 4종목 기간별 수익률 비교</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161c25; --panel2:#1c2430; --line:#2a3442;
+    --text:#e8edf4; --muted:#8b97a8;
+    --sec:#4c8dff;
+    --up:#f04452; --down:#3182f6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;
+    padding:28px 20px 60px; max-width:1080px; margin:0 auto;
+  }
+  .num{font-family:'SF Mono','Roboto Mono',ui-monospace,monospace; font-variant-numeric:tabular-nums}
+  header{margin-bottom:22px}
+  .eyebrow{font-size:12px; letter-spacing:.18em; color:var(--muted); text-transform:uppercase; margin-bottom:6px}
+  h1{font-size:25px; font-weight:800; letter-spacing:-0.02em}
+  h1 .accent{color:var(--sec)}
+  .asof{font-size:13px; color:var(--muted); margin-top:6px}
+
+  .controls{
+    display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:14px 16px; margin-bottom:18px;
+  }
+  .presets{display:flex; gap:6px; flex-wrap:wrap}
+  .presets button{
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer; font-weight:600;
+  }
+  .presets button:hover{border-color:var(--sec)}
+  .presets button.active{background:var(--sec); border-color:var(--sec); color:#fff}
+  .dates{display:flex; gap:8px; align-items:center; margin-left:auto}
+  .dates label{font-size:13px; color:var(--muted)}
+  .dates input{
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:8px; padding:7px 10px; font-size:14px; color-scheme:dark;
+  }
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-bottom:18px}
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:18px; border-top:3px solid var(--c,var(--line));
+  }
+  .card h3{font-size:15px; font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:8px}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--c)}
+  .ret{font-size:30px; font-weight:800; letter-spacing:-0.02em}
+  .ret.up{color:var(--up)} .ret.down{color:var(--down)}
+  .sub{font-size:13px; color:var(--muted); margin-top:8px; line-height:1.7}
+
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:18px}
+  .panel h2{font-size:15px; font-weight:700; margin-bottom:12px; color:var(--muted)}
+  .chartwrap{position:relative; height:380px}
+  .note{font-size:12px; color:#6b7787; margin-top:10px; line-height:1.6}
+
+  table{width:100%; border-collapse:collapse; font-size:14px}
+  th,td{padding:10px 8px; text-align:right; border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted); font-weight:600; font-size:13px}
+  td.up{color:var(--up); font-weight:700} td.down{color:var(--down); font-weight:700}
+
+  #status{
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:28px; color:var(--muted); font-size:15px; line-height:1.8; text-align:center;
+  }
+  #status .err{color:#ffb74d}
+  .gasrow{display:flex; gap:8px; margin-top:16px; justify-content:center; flex-wrap:wrap}
+  .gasrow input{
+    flex:1; min-width:260px; max-width:560px;
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:8px; padding:9px 12px; font-size:13px;
+  }
+  .gasrow button, #retryBtn{
+    background:var(--sec); border:none; color:#fff; font-weight:700;
+    padding:9px 20px; border-radius:8px; cursor:pointer; font-size:14px;
+  }
+  #retryBtn{margin-top:14px; display:none}
+  .hint{font-size:12px; color:#6b7787; margin-top:10px}
+  #log{
+    margin-top:14px; text-align:left; font-size:12px; color:#6b7787;
+    font-family:ui-monospace,monospace; max-height:160px; overflow:auto;
+    background:var(--panel2); border-radius:8px; padding:10px 12px; display:none;
+  }
+  #app{display:none}
+  @media (max-width:640px){
+    .dates{margin-left:0; width:100%}
+    .chartwrap{height:300px}
+    .ret{font-size:24px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">Memory Semiconductor · Period Return</div>
+  <h1>삼성전자 · 삼성전자우 · <span class="accent">SK하이닉스</span> · 마이크론 기간별 수익률</h1>
+  <div class="asof" id="asof">데이터 불러오는 중…</div>
+</header>
+
+<div id="status">
+  <div id="statusMsg">데이터를 불러오는 중입니다…</div>
+  <div class="gasrow">
+    <input type="text" id="gasUrl" placeholder="Google Apps Script 웹 앱 URL">
+    <button onclick="saveGas()">저장 후 불러오기</button>
+  </div>
+  <div class="hint">GAS 중계 서버 URL이 내장되어 있습니다. URL이 바뀐 경우에만 새로 입력하세요.</div>
+  <button id="retryBtn" onclick="location.reload()">다시 시도</button>
+  <div id="log"></div>
+</div>
+
+<div id="app">
+  <div class="controls">
+    <div class="presets" id="presets">
+      <button data-days="7">1주</button>
+      <button data-days="30">1개월</button>
+      <button data-days="91">3개월</button>
+      <button data-days="182">6개월</button>
+      <button data-days="ytd">YTD</button>
+      <button data-days="365" class="active">1년</button>
+    </div>
+    <div class="dates">
+      <label>시작</label><input type="date" id="startDate">
+      <label>종료</label><input type="date" id="endDate">
+    </div>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="panel">
+    <h2>기간 시작일 = 100 기준 상대 수익률</h2>
+    <div class="chartwrap"><canvas id="chart"></canvas></div>
+    <div class="note">
+      · 마이크론은 USD 기준 현지통화 수익률입니다 (환율 효과 미반영).
+      · 한국·미국 거래일이 달라 휴장일은 직전 종가로 이어서 표시합니다.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>기간 상세</h2>
+    <table>
+      <thead><tr>
+        <th>종목</th><th>시작가</th><th>종가</th><th>수익률</th><th>기간 최고</th><th>기간 최저</th><th>최고가 대비</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const STOCKS = [
+  {code:'005930', yahoo:'005930.KS', name:'삼성전자',    cur:'KRW', color:'#4c8dff', dash:[]},
+  {code:'005935', yahoo:'005935.KS', name:'삼성전자우',  cur:'KRW', color:'#9db9ee', dash:[6,4]},
+  {code:'000660', yahoo:'000660.KS', name:'SK하이닉스', cur:'KRW', color:'#ff5a3c', dash:[]},
+  {code:'MU',     yahoo:'MU',        name:'마이크론',    cur:'USD', color:'#b48cff', dash:[]},
+];
+const fmtPrice = (n,cur) => n==null ? '–' :
+  (cur==='USD' ? '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})
+               : Math.round(n).toLocaleString('ko-KR')+'원');
+const fmtPct = n => (n>=0?'+':'') + n.toFixed(2) + '%';
+let raw = {}, allDates = [], chart = null;
+
+/* ---------- 진단 로그 ---------- */
+const logEl = document.getElementById('log');
+function log(msg){
+  logEl.style.display = 'block';
+  logEl.textContent += msg + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/* ---------- GAS URL ---------- */
+const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzeAbN_bn9EJ5HSUAcuA3X1MvR0qTv3zBwMHt6p6atyeSFX3AvvK9A8z5PUTNLx0MEP3g/exec';
+function getGas(){ try{ return localStorage.getItem('gasUrl') || DEFAULT_GAS_URL; }catch(e){ return DEFAULT_GAS_URL; } }
+function saveGas(){
+  const v = document.getElementById('gasUrl').value.trim();
+  try{ localStorage.setItem('gasUrl', v); }catch(e){}
+  location.reload();
+}
+
+/* ---------- 소스 0: GAS 중계 (권장) ---------- */
+async function fromGAS(){
+  const base = getGas();
+  if(!base) throw new Error('GAS URL 미설정');
+  const url = base + (base.includes('?') ? '&' : '?') + 'symbols=' +
+    STOCKS.map(s=>s.code).join(',');
+  const r = await fetch(url, {redirect:'follow'});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const j = await r.json();
+  const out = {};
+  const missing = [];
+  STOCKS.forEach(s=>{
+    if(j[s.code] && j[s.code].length >= 10) out[s.name] = j[s.code];
+    else missing.push(s.name);
+  });
+  if(j._errors) log('GAS 소스 오류: ' + JSON.stringify(j._errors));
+  if(Object.keys(out).length < 2) throw new Error('유효 종목 부족 ('+Object.keys(out).length+'개)');
+  if(missing.length) log('경고: '+missing.join(', ')+' 제외하고 표시 — GAS 코드가 v3인지, "새 버전"으로 재배포했는지 확인');
+  log('OK  GAS에서 '+Object.keys(out).length+'/'+STOCKS.length+'종목 로드');
+  return out;
+}
+
+/* ---------- 폴백: 공개 프록시 경유 Yahoo ---------- */
+const PROXIES = [
+  {name:'allorigins-raw', wrap:u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u)},
+  {name:'allorigins-get', wrap:u=>'https://api.allorigins.win/get?url='+encodeURIComponent(u), unwrap:true},
+  {name:'codetabs',       wrap:u=>'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u)},
+];
+async function fetchText(url, unwrap){
+  const r = await fetch(url, {cache:'no-store'});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  let t = await r.text();
+  if(unwrap){ try{ t = JSON.parse(t).contents || ''; }catch(e){} }
+  return t;
+}
+async function fromYahoo(stock){
+  const target = 'https://query1.finance.yahoo.com/v8/finance/chart/' + stock.yahoo + '?range=1y&interval=1d';
+  let lastErr;
+  for(const p of PROXIES){
+    try{
+      const txt = await fetchText(p.wrap(target), p.unwrap);
+      const j = JSON.parse(txt);
+      const res = j.chart && j.chart.result && j.chart.result[0];
+      if(!res) throw new Error('빈 응답');
+      const ts = res.timestamp, cl = res.indicators.quote[0].close;
+      const out = [];
+      for(let i=0;i<ts.length;i++){
+        if(cl[i]==null) continue;
+        const kst = new Date(ts[i]*1000 + 9*3600*1000);
+        out.push({d: kst.toISOString().slice(0,10), c: cl[i]});
+      }
+      if(out.length < 10) throw new Error('데이터 부족');
+      log('OK  Yahoo/'+p.name+' '+stock.name+' '+out.length+'일');
+      return out;
+    }catch(e){ lastErr = e; log('FAIL Yahoo/'+p.name+' '+stock.name+': '+e.message); }
+  }
+  throw lastErr;
+}
+
+async function loadAll(){
+  try{ return await fromGAS(); }
+  catch(e){ log('GAS 실패, 공개 프록시로 폴백: ' + e.message); }
+  const out = {};
+  for(const s of STOCKS){ out[s.name] = await fromYahoo(s); }
+  return out;
+}
+
+/* ---------- 초기화 ---------- */
+async function init(){
+  document.getElementById('gasUrl').value = getGas();
+  try{
+    const series = await loadAll();
+
+    // 거래일 합집합 (한국/미국 캘린더가 다르므로 union + 휴장일 forward-fill)
+    const dateSet = new Set();
+    STOCKS.forEach(s=>{ if(series[s.name]) series[s.name].forEach(p=> dateSet.add(p.d)); });
+    allDates = [...dateSet].sort();
+
+    STOCKS.forEach(s=>{
+      if(!series[s.name]) return;
+      const m = new Map(series[s.name].map(p=>[p.d,p.c]));
+      raw[s.name] = allDates.map(d=> m.has(d) ? m.get(d) : null);
+    });
+
+    const first = allDates[0], last = allDates[allDates.length-1];
+    const sd = document.getElementById('startDate'), ed = document.getElementById('endDate');
+    sd.min = first; sd.max = last; ed.min = first; ed.max = last;
+    sd.value = first; ed.value = last;
+    document.getElementById('asof').textContent = '데이터: ' + first + ' ~ ' + last + ' 일봉 종가 기준 (마이크론은 USD)';
+    document.getElementById('status').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+    sd.addEventListener('change', ()=>{clearPreset(); render();});
+    ed.addEventListener('change', ()=>{clearPreset(); render();});
+    document.querySelectorAll('#presets button').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        document.querySelectorAll('#presets button').forEach(x=>x.classList.remove('active'));
+        b.classList.add('active');
+        const lastD = new Date(last);
+        let startD;
+        if(b.dataset.days==='ytd'){ startD = new Date(lastD.getFullYear(),0,1); }
+        else { startD = new Date(lastD.getTime() - (+b.dataset.days)*86400000); }
+        const s = startD.toISOString().slice(0,10);
+        sd.value = s < first ? first : s;
+        ed.value = last;
+        render();
+      });
+    });
+    render();
+  }catch(e){
+    document.getElementById('statusMsg').innerHTML =
+      '<span class="err">모든 데이터 소스 접근에 실패했습니다 (' + e.message + ')</span><br>' +
+      '아래 로그를 확인하거나, GAS URL을 다시 등록해 보세요.';
+    document.getElementById('retryBtn').style.display = 'inline-block';
+  }
+}
+
+function clearPreset(){ document.querySelectorAll('#presets button').forEach(x=>x.classList.remove('active')); }
+
+function sliceRange(){
+  const s = document.getElementById('startDate').value;
+  const e = document.getElementById('endDate').value;
+  const i0 = allDates.findIndex(d => d >= s);
+  let i1 = -1;
+  for(let i=allDates.length-1;i>=0;i--){ if(allDates[i] <= e){ i1=i; break; } }
+  if(i0<0 || i1<0 || i1<=i0) return null;
+  return [i0,i1];
+}
+
+function render(){
+  const r = sliceRange();
+  if(!r) return;
+  const [i0,i1] = r;
+  const dates = allDates.slice(i0,i1+1);
+
+  const cards = document.getElementById('cards');
+  const tbody = document.getElementById('tbody');
+  cards.innerHTML=''; tbody.innerHTML='';
+  const datasets = [];
+
+  STOCKS.forEach(s=>{
+    if(!raw[s.name]) return;
+    const seg = raw[s.name].slice(i0,i1+1);
+    const vals = seg.filter(v=>v!=null);
+    if(vals.length < 2) return;
+    const start = vals[0], end = vals[vals.length-1];
+    const ret = (end/start-1)*100;
+    const hi = Math.max(...vals), lo = Math.min(...vals);
+    const fromHi = (end/hi-1)*100;
+    const cls = ret>=0?'up':'down';
+
+    cards.insertAdjacentHTML('beforeend',
+      '<div class="card" style="--c:'+s.color+'">' +
+        '<h3><span class="dot"></span>'+s.name+'</h3>' +
+        '<div class="ret num '+cls+'">'+fmtPct(ret)+'</div>' +
+        '<div class="sub num">'+fmtPrice(start,s.cur)+' → '+fmtPrice(end,s.cur)+'</div>' +
+      '</div>');
+
+    tbody.insertAdjacentHTML('beforeend',
+      '<tr><td>'+s.name+'</td>' +
+      '<td class="num">'+fmtPrice(start,s.cur)+'</td>' +
+      '<td class="num">'+fmtPrice(end,s.cur)+'</td>' +
+      '<td class="num '+cls+'">'+fmtPct(ret)+'</td>' +
+      '<td class="num">'+fmtPrice(hi,s.cur)+'</td>' +
+      '<td class="num">'+fmtPrice(lo,s.cur)+'</td>' +
+      '<td class="num '+(fromHi>=0?'up':'down')+'">'+fmtPct(fromHi)+'</td></tr>');
+
+    // 차트: 휴장일은 직전 종가로 forward-fill
+    let lastV = null;
+    const data = seg.map(v=>{
+      if(v!=null) lastV = v;
+      return lastV==null ? null : +(lastV/start*100).toFixed(2);
+    });
+    datasets.push({
+      label:s.name, data,
+      borderColor:s.color, borderDash:s.dash,
+      borderWidth:2, pointRadius:0, pointHitRadius:8, tension:0.1, spanGaps:true,
+    });
+  });
+
+  if(chart) chart.destroy();
+  chart = new Chart(document.getElementById('chart'), {
+    type:'line',
+    data:{labels:dates, datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      plugins:{
+        legend:{labels:{color:'#e8edf4', boxWidth:18, font:{size:13}}},
+        tooltip:{
+          callbacks:{ label:(ctx)=> ctx.parsed.y==null ? '' :
+            ' '+ctx.dataset.label+': '+(ctx.parsed.y-100>=0?'+':'')+(ctx.parsed.y-100).toFixed(2)+'%' }
+        }
+      },
+      scales:{
+        x:{ticks:{color:'#8b97a8', maxTicksLimit:10}, grid:{color:'rgba(42,52,66,.5)'}},
+        y:{ticks:{color:'#8b97a8'}, grid:{color:'rgba(42,52,66,.5)'}}
+      }
+    }
+  });
+}
+init();
+</script>
+</body>
+</html>
